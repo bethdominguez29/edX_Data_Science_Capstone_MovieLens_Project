@@ -1,0 +1,622 @@
+---
+title: "edX Data Science: Capstone Course - MovieLens Project"
+author: "Elizabeth Plasse Dominguez"
+date: "June 29, 2022"
+output: pdf_document
+---
+
+## Overview
+
+The goal of this Capstone Course MovieLens Project was to create a movie recommendation model able to predict movie ratings with a root mean squared error (RMSE) of less than 0.86490 when compared to actual movie ratings. The data used comes from the MovieLens 10M Dataset¹ and contains the following six variables:
+
+-   userId - unique number for each user,
+
+-   movieId - unique number for each movie,
+
+-   rating - numbers ranging from 0.5 to 5 in increments of 0.5,
+
+-   timestamp - number of seconds since midnight (UTC) of 1-1-1970,
+
+-   title - character string of movie title and year of movie release, and
+
+-   genres - character string of movie genre or multiple genres - when an observation has multiple genres each genre is separated by a "\|" (pipe-separated) - there are 18 unique genres (Action, Adventure, Animation, Children's, Comedy, Crime, Documentary, Drama, Fantasy, Film-Noir, Horror, Musical, Mystery, Romance, Sci-Fi, Thriller, War, Western).
+
+Data was downloaded from the MovieLens dataset and divided into the two following datasets, each containing these six variables - *userId, movieId, rating, timestamp, title, genres*:
+
+-   *edx*, with about 9 million observations, and
+
+-   *validation*, with about 1 million observations.
+
+Data investigation, analysis and visualization of the *edx* data set, detailed in the Methods section, led to the creation of the following tidy datasets:
+
+-   *edx_tidy*, with about 23,370,000 observations, and
+
+-   *validation_tidy*, with about 2,597,000 observations.
+
+*edx_tidy* and *validation_tidy* also each containing these six variables however note that two of the variables have changed - *userId, movieId, rating, date_rated, title, single_genres.*
+
+*edx_tidy* was used to train a movie rating prediction model which incorporates the average rating of individual movies and an individual user bias calculated from the data. When this model was used to produce movie rating predictions from the data in *validation_tidy* and these predictions were compared to actual movie ratings, a RMSE of 0.85698 was obtained.
+
+## Methods
+
+Accurate movie rating prediction was desired from the model so developing a sense for how rating varies in relation to the other variables in the data was important. Intuitively, rating information by movie and by user seems important. Popular movies may be rated more frequently and/or differently than small independent films and users probably differ in how critical or liberal they are with their ratings. Looking at the number of ratings movies have received and the number of ratings users have given was a way to get a sense for these differences.
+
+Initial exploration of *edx* data revealed that many of the *genres* variable entries had more than one genre per observation and that the *timestamp* variable might be more useful in a year-month-day (y-m-d) format. Data wrangling to produce a tidy format with one genre per row and timestamp in y-m-d format resulted in the creation of the *edx_tidy* and *validation_tidy* datasets and the replacement of the *genres* and *timestamp* variables with the new variables *single_genres* and *date_rated, respectively*.
+
+Working with *edx_tidy* data, plots of the number of ratings associated with the other five variables were produced, as were plots of the average ratings for movies, users and dates_rated. This information along with model building knowledge gained in the edX Data Science: Machine Learning course led to a rating prediction model using individual movie means and individual user effects.
+
+### Data Exploration/Cleaning/Analysis
+
+Data from the Movielens dataset was downloaded and manipulated into two datasets, with object names *edx* and *validation*, which were to be used for model training and model prediction testing, respectively. The code provided in edX Data Science: Capstone course accomplished this.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# create train (edx) and validation (validation) sets
+# supplied by edX Data Science: Capstone Course 
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("https://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                            title = as.character(title),
+                                            genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding")
+test_index <- createDataPartition(y = movielens$rating,
+                                  times = 1, p = 0.1,
+                                  list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+      semi_join(edx, by = "movieId") %>%
+      semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+The objects *edx* and *validation* are data tables with the same six variables (*userId, movieId, rating, timestamp, title, genres*) and one rating per observation. *edx* has `r noquote(format(nrow(edx), big.mark = ","))` rows and *validation* has `r noquote(format(nrow(validation), big.mark = ","))`. Further analysis of the variables in *edx* showed the unique number of each variable which are presented in Table 1.
+
+#### Table 1
+
+|                   Number of Unique Users                    |                   Number of Unique Movies                    |                  Number of Unique Ratings                   |                  Number of Unique Timestamps                   |                  Number of Unique Titles                   |                   Number of Unique Genres                   |
+|:----------:|:----------:|:----------:|:----------:|:----------:|:----------:|
+| `r noquote(format(n_distinct(edx$userId), big.mark = ","))` | `r noquote(format(n_distinct(edx$movieId), big.mark = ","))` | `r noquote(format(n_distinct(edx$rating), big.mark = ","))` | `r noquote(format(n_distinct(edx$timestamp), big.mark = ","))` | `r noquote(format(n_distinct(edx$title), big.mark = ","))` | `r noquote(format(n_distinct(edx$genres), big.mark = ","))` |
+
+`r noquote(format(n_distinct(edx$genres), big.mark = ","))` was an unexpected number for the unique number of genres. The MovieLens variable description indicated 18 unique genres. This large number was the result of each single genre plus all of the unique multiple pipe_separated genres being recognized as unique.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# create df by separating genres in edx,
+#   determine number of ratings in each genre, and
+#   arrange genres in descending order
+genres_edx <- edx %>% separate_rows(genres, sep = "\\|") %>%
+  group_by(genres) %>% 
+  summarise(n = n()) %>% 
+  arrange(desc(n))
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# determine percentage of rows in edx with pipe_separated genres
+number_of_solo_genre_movies <- edx %>% 
+  group_by(genres) %>% 
+  filter(!grepl(".*\\|.*", genres)) %>% 
+  ungroup() %>% 
+  count()
+pecent_multiple_genre_movies <- 100 - (100 * number_of_solo_genre_movies$n/nrow(edx))
+```
+
+Further investigation into the *genres* variable of *edx* showed that there were actually 20 unique genres (including the genre heading of (no genres listed)) and that `r round(pecent_multiple_genre_movies)`% of the rows have multiple pipe-separated genres. A list of the genres in descending order of number of ratings is presented in Table 2.
+
+\pagebreak
+
+#### Table 2
+
+| Rank by Number of Ratings |             Genre Name             |                   Number of Ratings                   | Rank by Number of Ratings |             Genre Name             |                   Number of Ratings                   |
+|:----------:|:----------:|:----------:|:----------:|:----------:|:----------:|
+|             1             | `r noquote(genres_edx$genres[1])`  | `r noquote(format(genres_edx$n[1], big.mark = ","))`  |            11             | `r noquote(genres_edx$genres[11])` | `r noquote(format(genres_edx$n[11], big.mark = ","))` |
+|             2             | `r noquote(genres_edx$genres[2])`  | `r noquote(format(genres_edx$n[2], big.mark = ","))`  |            12             | `r noquote(genres_edx$genres[12])` | `r noquote(format(genres_edx$n[12], big.mark = ","))` |
+|             3             | `r noquote(genres_edx$genres[3])`  | `r noquote(format(genres_edx$n[3], big.mark = ","))`  |            13             | `r noquote(genres_edx$genres[13])` | `r noquote(format(genres_edx$n[13], big.mark = ","))` |
+|             4             | `r noquote(genres_edx$genres[4])`  | `r noquote(format(genres_edx$n[4], big.mark = ","))`  |            14             | `r noquote(genres_edx$genres[14])` | `r noquote(format(genres_edx$n[14], big.mark = ","))` |
+|             5             | `r noquote(genres_edx$genres[5])`  | `r noquote(format(genres_edx$n[5], big.mark = ","))`  |            15             | `r noquote(genres_edx$genres[15])` | `r noquote(format(genres_edx$n[15], big.mark = ","))` |
+|             6             | `r noquote(genres_edx$genres[6])`  | `r noquote(format(genres_edx$n[6], big.mark = ","))`  |            16             | `r noquote(genres_edx$genres[16])` | `r noquote(format(genres_edx$n[16], big.mark = ","))` |
+|             7             | `r noquote(genres_edx$genres[7])`  | `r noquote(format(genres_edx$n[7], big.mark = ","))`  |            17             | `r noquote(genres_edx$genres[17])` | `r noquote(format(genres_edx$n[17], big.mark = ","))` |
+|             8             | `r noquote(genres_edx$genres[8])`  | `r noquote(format(genres_edx$n[8], big.mark = ","))`  |            18             | `r noquote(genres_edx$genres[18])` | `r noquote(format(genres_edx$n[18], big.mark = ","))` |
+|             9             | `r noquote(genres_edx$genres[9])`  | `r noquote(format(genres_edx$n[9], big.mark = ","))`  |            19             | `r noquote(genres_edx$genres[19])` | `r noquote(format(genres_edx$n[19], big.mark = ","))` |
+|            10             | `r noquote(genres_edx$genres[10])` | `r noquote(format(genres_edx$n[10], big.mark = ","))` |            20             | `r noquote(genres_edx$genres[20])` | `r noquote(format(genres_edx$n[20], big.mark = ","))` |
+
+These finding in the *genres* variable of *edx* led to the conclusion that the data needed to be made tidy by creating a new data frame, *edx_tidy*, with separate observations for each genre in a new variable called *single_genres.* Here is an example: if a row of *edx* had three genres listed, say Children\|Comedy\|Fantasy, this row needed to be adjusted in *edx_tidy* to have just Children as the *single_genres* variable and two new additional rows needed to be added - one with Comedy and the other with Fantasy as the *single_genres* variable in *edx_tidy*. Both new rows have identical information in the other 5 variables (*userId, movieId, rating, date_rated and title*).
+
+Preliminary plots of *edx* variables (not included here) also indicated that the *timestamp* variable might be more useful if converted to year-month-day (y-m-d) format. So the *timestamp* variable of *edx* was converted to the y-m-d format in a new variable called *date_rated* in *edx_tidy* This facilitated averaging ratings by *date_rated* and looking for possible seasonality or cyclicality in the data.
+
+Thus the MovieLens data was manipulated into two new data frames, *edx_tidy* and *validation_tidy*. Both with the following six variables: *userId, movieId, rating, date_rated, title and single_genres*.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# code to create tidy train (edx_tidy) and
+#   validation (validation_tidy - final hold-out test set) sets
+# MovieLens data "genres" variable is separated into one observation
+#   for each genre and new variable renamed "single_genres"
+# MovieLens data "timestamp" variable is reformatted to
+#     y-m-d format and new variable renamed "date_rated"
+if(!require(tidyverse))
+  install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret))
+  install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table))
+  install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t",
+                             readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")),
+                          "\\::", 3)
+
+colnames(movies) <- c("movieId", "title", "genres")
+
+movies <- as.data.frame(movies) %>% 
+  mutate(movieId = as.numeric(movieId),
+         title = as.character(title),
+         genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# format timestamp to y-m-d and change column name to date_rated
+library(lubridate)
+movielens <- movielens %>% 
+  mutate(timestamp = format(as.Date(as_datetime(timestamp)),
+                            "%Y-%m-%d"))
+
+setnames(movielens, "timestamp", "date_rated")
+
+# make a separate row for each genre and change column name to single_genres
+tidy_movielens <- movielens %>% 
+  separate_rows(genres, sep = "\\|")
+
+setnames(tidy_movielens, "genres", "single_genres")
+
+# Validation_tidy set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding")
+test_index <- createDataPartition(y = tidy_movielens$rating,
+                                  times = 1,
+                                  p = 0.1,
+                                  list = FALSE)
+edx_tidy <- tidy_movielens[-test_index,]
+temp <- tidy_movielens[test_index,]
+
+# Make sure userId and movieId in validation_tidy set are
+#   also in edx_tidy set
+validation_tidy <- temp %>% 
+  semi_join(edx_tidy, by = "movieId") %>%
+  semi_join(edx_tidy, by = "userId")
+
+# Add rows removed from validation_tidy set back into edx_tidy set
+removed <- anti_join(temp, validation_tidy)
+edx_tidy <- rbind(edx_tidy, removed)
+
+rm(dl, ratings, movies, test_index, temp,
+   movielens, tidy_movielens, removed)
+```
+
+*edx_tidy*, and *validation_tidy* are tibble data frames with `r noquote(format(nrow(edx_tidy), big.mark = ","))` and `r noquote(format(nrow(validation_tidy), big.mark = ","))` rows, respectively. As *edx_tidy* data would be used to train the model in this project, further analysis of the variables in this tibble data frame was conducted to show the unique number of each variable and is presented in Table 3.
+
+#### Table 3
+
+|                      Number of Unique Users                      |                      Number of Unique Movies                      |                     Number of Unique Ratings                     |                     Number of Unique Dates_Rated                     |                     Number of Unique Titles                     |                     Number of Unique Single_Genres                      |
+|:----------:|:----------:|:----------:|:----------:|:----------:|:----------:|
+| `r noquote(format(n_distinct(edx_tidy$userId), big.mark = ","))` | `r noquote(format(n_distinct(edx_tidy$movieId), big.mark = ","))` | `r noquote(format(n_distinct(edx_tidy$rating), big.mark = ","))` | `r noquote(format(n_distinct(edx_tidy$date_rated), big.mark = ","))` | `r noquote(format(n_distinct(edx_tidy$title), big.mark = ","))` | `r noquote(format(n_distinct(edx_tidy$single_genres), big.mark = ","))` |
+
+The numbers of unique users, movies, ratings, and titles were the same in *edx_tidy* as in *edx*. The number of unique dates_rated was `r noquote(format(n_distinct(edx_tidy$date_rated), big.mark = ","))` due to the y-m-d format change and the number of unique single_genres was `r noquote(format(n_distinct(edx_tidy$single_genres), big.mark = ","))` which agrees with the 18 listed in the MovieLens data description plus the addition of IMAX and (no genres listed).
+
+\pagebreak
+
+### Visualization
+
+The following visualizations of *edx_tidy* data demonstrated the many aspects of variability in the data.
+
+Figures 1 and 2 plot the number of ratings for each movie and each user, respectively. Both plots exhibit exponential decay.
+
+Figure 1 shows that some movies are rated less often than others with many movies receiving a small number of ratings and a small number of movies receiving many ratings.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Figure 1 - histogram plot of number of ratings each movie received
+# log 10 scale used on y axis to show detail across x axis
+edx_tidy %>% 
+  group_by(movieId) %>% 
+  count() %>% 
+  ggplot(aes(x = n)) +
+  geom_histogram(binwidth = 3000) +
+  labs(x = "Number of Ratings a Movie Received",
+       y = "Number of Movies (log10 scale)",
+       title = "Figure 1 - Number of Ratings for Movies") +
+  scale_y_log10(labels = scales::comma) +
+  scale_x_continuous(labels = scales::comma,
+                     limits = c(0, 100000))
+```
+
+\pagebreak
+
+Figure 2 shows that some users rate more movies than other users do, with many users rating a small number of movies and a small number of users rating many movies.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Figure 2 - histogram plot of number of ratings given by each user
+# log 10 scale used on y axis to show detail across x axis
+edx_tidy %>% 
+  group_by(userId) %>% 
+  count() %>% 
+  ggplot(aes(x = n)) +
+  geom_histogram(binwidth = 300) +
+  labs(x = "Number of Ratings Submitted by Each User",
+       y = "Number of Users (log10 scale)",
+       title = "Figure 2 - Number of Ratings Sumitted by Users") +
+  scale_y_log10(labels = scales::comma) +
+  scale_x_continuous(labels = scales::comma,
+                     limits = c(0, 10000))
+```
+
+\pagebreak
+
+Figure 3 plots the number of ratings submitted on a given day and shows how this number varies. There are many days with low numbers of ratings and fewer days with high numbers of ratings.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Figure 3 - histogram plot of number of ratings for date_rated
+# log 10 scale used on y axis to show detail across x axis
+edx_tidy %>% 
+  group_by(date_rated) %>% 
+  count() %>% 
+  ggplot(aes(x = n)) +
+  geom_histogram(binwidth = 1000) +
+  labs(x = "Number of Ratings on Date Rated",
+       y = "Number of Dates Rated (log10 scale)",
+       title = "Figure 3 - Number of Ratings on Dates Rated") +
+  scale_y_log10(labels = scales::comma) +
+  scale_x_continuous(labels = scales::comma,
+                     limits = c(0, 50000))
+```
+
+\pagebreak
+
+Figure 4 is a bar plot of the number of ratings at each rating level. The plot is skewed to the right and shows more higher ratings are given than lower ratings (there are more 3, 4, 5 ratings than 1, 2 ratings). There are also a larger number of whole number ratings than ratings with 0.5 increments. Additionally, the plot includes a vertical line at x =`r mean(edx_tidy$rating)` marking the overall average rating for *edx_tidy*. If edx_tidy ratings were normally distributed the mean would be `r mean(seq(0.5, 5, 0.5))`.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Figure 4 - bar plot of number of ratings in each rating category with vertical line
+#   plot of mean rating in edx_tidy 
+edx_tidy %>% 
+  group_by(rating) %>% 
+  summarise(n = n()) %>%
+  ggplot(aes(x = rating, y = n)) +
+  geom_col() +
+  scale_x_continuous(breaks = seq(0.5, 5, 0.5),
+                     labels = seq(0.5, 5, 0.5)) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "Ratings",
+       y = "Number of Ratings",
+       title = "Figure 4 - Number of Ratings in Each Rating Category")  +
+  geom_vline(xintercept = mean(edx_tidy$rating), linetype = "dashed",
+             color = "red") +
+  geom_text(aes(x = 2.9,
+                label = "mean rating for edx_tidy", y = 5.9*10^6),
+            color = "red", size = 3)
+```
+
+\pagebreak
+
+Figure 5 is a bar plot of the number of ratings in each genre category showing the differences between the number of ratings from genre to genre. Certain genres (Drama, Comedy, Action, Thriller and Adventure) have many ratings while others (IMAX, Documentary, Film-Noire, Western) have many less. The genres are arranged alphabetically on the x axis.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Figure 5
+# plot the number of ratings in each genre category
+# create smaller data frame of just single_genres, rating and title
+single_genres_edx_tidy <- edx_tidy %>% 
+  select(single_genres, rating, title)
+
+# arrange single_genres_edx_tidy alphabetically
+alpha_single_genres <- single_genres_edx_tidy[order(single_genres_edx_tidy$single_genres),] 
+
+# create vector of single_genre names starting with (no genres listed) and then
+#   alphabetical thereafter
+single_genres_by_name <-  c("(no genres listed)", "Action", "Adventure",
+                     "Animation", "Children","Comedy", "Crime",
+                     "Documentary", "Drama", "Fantasy", "Film-Noir",
+                     "Horror", "IMAX", "Musical", "Mystery",
+                     "Romance", "Sci-Fi", "Thriller", "War", "Western")
+
+# create vector of number of ratings in each single_genre
+rating_count_for_single_genres <- sapply(single_genres_by_name, function(g) {
+  sum(str_detect(alpha_single_genres$single_genres, g))
+})
+
+#create tibble data frame of single_genres and number of single_genres
+tab_single_genres_num_ratings <- tibble(single_genres = single_genres_by_name,
+                            num_ratings = rating_count_for_single_genres)
+
+# bar plot of number of ratings for each single_genres category 
+tab_single_genres_num_ratings %>% 
+  ggplot(aes(single_genres, num_ratings)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "Single_Genres",
+       y = "Number of Ratings",
+       title = "Figure 5 - Number of Ratings in Each Single_Genres Category") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+\pagebreak
+
+Figures 6, 7 and 8 are plots of the average ratings for movies, users and dates_rated, respectively.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Figure 6 - histogram plot of the number of average ratings for movies with
+# vertical blue line plot for the mean of the average ratings for movies
+# and vertical red line plot for the mean rating for edx_tidy
+avg_ratings_movies <- edx_tidy %>% group_by(movieId) %>%
+  summarise(movieId, n = n(),
+            avg_rating = mean(rating)) %>% 
+  slice_head(n = 1)
+
+avg_ratings_movies %>% 
+  ggplot(aes(avg_rating)) +
+  geom_histogram(bins = 50) +
+  scale_x_continuous(breaks = seq(0.5, 5, 0.5),
+                     labels = seq(0.5, 5, 0.5)) +
+  labs(x = "Average Rating for Each Movie",
+       y = "Number of Ratings",
+       title = "Figure 6 - Number of Average Ratings for Movies") +
+  geom_vline(xintercept = mean(edx_tidy$rating), linetype = "dashed",
+             color = "red") +
+  geom_text(aes(x = 4.2, y = 775,
+                label = "mean rating for edx_tidy"), color = "red",
+            size = 3) +
+  geom_vline(xintercept = mean(avg_ratings_movies$avg_rating),
+             linetype = "longdash", color = "blue") +
+  geom_text(aes(x = 2.25, y = 725,
+                label = "mean of average ratings for movies"), color = "blue",
+            size = 3)
+```
+
+\pagebreak
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Figure 7 - histogram plot of number of average ratings for users with
+# vertical blue line plot for the mean of the average ratings for users
+# and vertical red line plot for the mean rating for edx_tidy
+avg_ratings_users <- edx_tidy %>% group_by(userId) %>%
+  summarise(userId, n = n(),
+            avg_rating = mean(rating)) %>% 
+  slice_head(n = 1)
+
+avg_ratings_users %>% 
+  ggplot(aes(avg_rating)) +
+  geom_histogram(bins = 50) +
+  scale_x_continuous(breaks = seq(0.5, 5, 0.5),
+                     labels = seq(0.5, 5, 0.5)) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "Average Rating for Each User",
+       y = "Number of Ratings",
+       title = "Figure 7 - Number of Average Ratings for Users") +
+  geom_vline(xintercept = mean(edx_tidy$rating), linetype = "dashed",
+             color = "red") +
+  geom_text(aes(x = 2.95, y = 6200,
+                label = "mean rating for edx_tidy"), color = "red",
+            size = 2.75) +
+  geom_vline(xintercept = mean(avg_ratings_users$avg_rating),
+                         linetype = "longdash", color = "blue") +
+  geom_text(aes(x = 4.4, y = 6500,
+                label = "mean of average ratings for users"), color = "blue",
+            size = 2.75)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Figure 8 - histogram plot of number of average ratings for dates rated with
+# vertical blue line plot for the mean of the average ratings for date_rated
+# and vertical red line plot for the mean rating for edx_tidy
+avg_ratings_date_rated <- edx_tidy %>% group_by(date_rated) %>%
+  summarise(date_rated, n = n(),
+            avg_rating = mean(rating)) %>% 
+  slice_head(n = 1)
+
+avg_ratings_date_rated %>% 
+  ggplot(aes(avg_rating)) +
+  geom_histogram(bins = 80) +
+  scale_x_continuous(breaks = seq(0.5, 5, 0.5),
+                     labels = seq(0.5, 5, 0.5),
+                     limits = c(0.5, 5)) +
+  labs(x = "Average Rating for Each Date_Rated",
+       y = "Number of Ratings",
+       title = "Figure 8 - Number of Average Ratings for Dates Rated") +
+  geom_vline(xintercept = mean(edx_tidy$rating), linetype = "dashed",
+             color = "red") +
+  geom_text(aes(x = 3, y = 750,
+                label = "mean rating for edx_tidy"), color = "red",
+            size = 2.75) +
+  geom_vline(xintercept = mean(avg_ratings_date_rated$avg_rating),
+             linetype = "longdash", color = "blue") +
+  geom_text(aes(x = 4.4, y = 770,
+                label = "mean of average ratings for dates rated"),
+            color = "blue", size = 2.75)
+```
+
+The plots in Figures 6, 7 and 8 are close to normally-distributed and are characterized by the means and variances presented in Table 4.
+
+#### Table 4
+
+| Average Rating by |                   Mean of Average Ratings Distribution                   |                Variance of Average Ratings Distribution                 |
+|:-----------------:|:------------------------:|:--------------------------:|
+|       Movie       |   `r round(mean(avg_ratings_movies$avg_rating),2)`   |   `r round(var(avg_ratings_movies$avg_rating),3)`   |
+|       User        |   `r round(mean(avg_ratings_users$avg_rating), 2)`    |   `r round(var(avg_ratings_users$avg_rating), 3)`    |
+|    Date_Rated     | `r round(mean(avg_ratings_date_rated$avg_rating), 2)` | `r round(var(avg_ratings_date_rated$avg_rating), 3)` |
+
+The distribution of average rating by movie has the largest variance (`r round(var(avg_ratings_movies$avg_rating), 3)`), followed by the distribution of average rating by user (`r round(var(avg_ratings_users$avg_rating), 3)`) and then the distribution of average rating by dates_rated (`r round(var(avg_ratings_date_rated$avg_rating), 3)`). The means and variances of these distributions in comparison to the mean of the ratings in *edx_tidy* (`r round(mean(edx_tidy$rating), 2)`) inspired the use of the individual movie means as the first term and the individual user effects as the second term in the design of the movie rating prediction model.
+
+### Model Approach and Design
+
+The edX Data Science: Machine Learning course introduced the following recommendation system model as:
+
+$Y_{iu} = \mu + b_i + b_u + \epsilon_{iu}$
+
+where:
+
+-   $Y_{iu}$ is the prediction for a specific movie *i* and a specific user *u*,
+
+-   $\mu$ is the mean of all the ratings in the dataset,
+
+-   $b_i$ is a movie specific adjustment used to capture how different movies are rated,
+
+-   $b_u$ is a user specific adjustment used to capture how different users rate movies, and
+
+-   $\epsilon_{iu}$ is an error term containing all of the remaining random variation.
+
+Here $\mu$ is the average of the ratings in the dataset. The movie effect, $b_i$, is estimated by $b_i = Y_{iu} - \mu$ where the average of all the ratings is subtracted from the specific movie/user rating. The user effect, $b_u$ is estimated by $b_u = Y_{iu} - \mu - b_i$ where the average of all the ratings and the movie effect are both subtracted from the specific movie/user rating. The movie effect ($b_i$) and user effect ($b_u$) are movie and user specific adjustments which attempt to capture how ratings differ for different movies and users, respectively.
+
+This Capstone MovieLens Project movie rating model is:
+
+$Y_{iu} = \mu_i + b_u + \epsilon_{iu}$
+
+where:
+
+-   $Y_{iu}$ is the prediction for a specific movie *i* and a specific user *u*,
+
+-   $\mu_i$ is the mean of a specific movie's ratings,
+
+-   $b_u$ is a user specific adjustment attempting to capture how different users rate movies, and
+
+-   $\epsilon_{iu}$ is an error term containing all of the remaining random variation.
+
+This model uses the edX Data Science: Machine Learning course model as a guide but rather than using the average of all of the ratings in the data as its first term this model uses each movie's average rating, $\mu_i$. The intuition for this comes from Figure 6. It shows the large variation in average rating for individual movies therefore the individual movie effect is important in determining ratings. Starting with each movie's average rating was expected to produce a more accurate prediction than the average for the entire dataset. The model then adds an individual user effect which is calculated from the data using $b_u = Y_{iu} - \mu_i$. The large variation in individual user average ratings demonstrated in Figure 7 supports this choice.
+
+In order to train this model the *edx_tidy* dataset was divided into training and test sets: *edx_tidy_train* and *edx_tidy_test*.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# create training and test sets for edx_tidy to train model
+set.seed(1, sample.kind="Rounding")
+edx_tidy_test_index <- createDataPartition(edx_tidy$rating,
+                                      times = 1,
+                                      p = 0.2,
+                                      list = FALSE)
+edx_tidy_train <- edx_tidy[-edx_tidy_test_index,]
+edx_tidy_test <- edx_tidy[edx_tidy_test_index,]
+
+# remove users and movies from edx_tidy_test that are not
+#   in edx_tidy_training
+edx_tidy_test <- edx_tidy_test %>% 
+  semi_join(edx_tidy_train, by = "movieId") %>% 
+  semi_join(edx_tidy_train, by = "userId")
+```
+
+In order to show how the model's predictions compare to the actual ratings the following root mean squared loss function was used. $$RMSE = \sqrt{\frac{1}{N} \sum_{i=1}^{N}(\hat{y}_i - y_i)^2}$$ The closer the RMSE is to zero the better the model's predictions. For this model the goal is a RMSE less than 0.86490.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# code to calculate the RMSE of rating predictions
+#   compared to actual ratings
+RMSE <- function(predicted_ratings, actual_ratings){
+  sqrt(mean((predicted_ratings - actual_ratings)^2))
+}
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# train prediction model with average movie ratings by movieId and the
+#   individual user effect which is approximated by taking the average
+#   of the residuals obtained by removing the average movie
+#   rating from the actual rating
+options(digits = 5)
+movie_avgs_train <- edx_tidy_train %>% 
+  group_by(movieId) %>% 
+  summarise(mu_i = mean(rating))
+
+user_avgs_train <- edx_tidy_train %>% 
+  left_join(movie_avgs_train, by = "movieId") %>% 
+  group_by(userId) %>% 
+  summarise(b_u = mean(rating - mu_i))
+
+predictions_movie_avgs_and_user_effect_train <- edx_tidy_test %>% 
+  left_join(movie_avgs_train, by = "movieId") %>% 
+  left_join(user_avgs_train, by = "userId") %>% 
+  mutate(predictions = mu_i + b_u) %>% 
+  pull(predictions)
+
+RMSE_mu_i_and_b_u_train <- RMSE(predictions_movie_avgs_and_user_effect_train,
+                                edx_tidy_test$rating)
+```
+
+The model was trained on *edx_tidy_train* and predictions made from *edx_tidy_test*. These predictions were then compared to the actual ratings in *edx_tidy_test* and produced a RMSE of `r RMSE_mu_i_and_b_u_train`. This was below target RMSE of 0.86490 so model was ready to test with *validation_tidy* data.
+
+## Results
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# run model,
+#   make movie rating predictions with validation_tidy data, and
+#   calculate the RMSE of the predicted movie ratings relative to
+#   the actual movie ratings in validation_tidy
+options(digits = 5)
+movie_avgs_model <- edx_tidy %>% 
+  group_by(movieId) %>% 
+  summarise(mu_i = mean(rating))
+
+user_avgs_model <- edx_tidy %>% 
+  left_join(movie_avgs_model, by = "movieId") %>% 
+  group_by(userId) %>% 
+  summarise(b_u = mean(rating - mu_i))
+
+model_predictions_validation <- validation_tidy %>% 
+  left_join(movie_avgs_model, by = "movieId") %>% 
+  left_join(user_avgs_model, by = "userId") %>% 
+  mutate(predictions = mu_i + b_u) %>% 
+  pull(predictions)
+
+model_RMSE_validation <- RMSE(model_predictions_validation,
+                              validation_tidy$rating)
+```
+
+The trained model produced a RMSE of `r RMSE_mu_i_and_b_u_train` when tested on *edx_tidy_test* data. When the trained model was used to make predictions from the *validation_tidy* data and those predictions were compared to the actual ratings in *validation_tidy* a RMSE of `r model_RMSE_validation` was achieved. This model meets the goal of beating a RMSE of 0.86490.
+
+## Conclusion
+
+This edX Data Science: Capstone Course MovieLens Project produced a movie rating prediction model from data downloaded from the MovieLens Datasets of GroupLens. The model used the average rating for individual movies plus an individual user effect determined from the *rating*, *movieId* and *userId* variables of the *edx_tidy* data. It successfully made rating predictions from the *validation_tidy* data and produced a RMSE of `r model_RMSE_validation` when the movie rating predictions were compared to actual movie ratings.
+
+Limitations of the model include its very basic design and use of only two of the five variables from the data for prediction. There may be additional rating information contained in the *single_genres*, *date_rated* or the *title* variables which were not included in the model. The *title* variable contains the name of the movie and the year of movie release. The year of movie release may provide additional rating variation information and could be made into a variable but was not done so by this work.
+
+Future work may include:
+
+-   construction of a new "movie release year" variable,
+
+-   exploration of the rating variation information in the *single_genres*, *date_rated*, and movie release year variables, and
+
+-   attempting to design a model using k-nearest neighbor or principal component analysis methods.
+
+## References
+
+1.  <http://grouplens.org/datasets/movielens/10m/>
